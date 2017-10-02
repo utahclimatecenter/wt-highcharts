@@ -1,0 +1,796 @@
+<script src="../jquery/dist/jquery.min.js"></script>
+<script src="../highcharts/highcharts.src.js"></script>
+<script src="../highcharts/highcharts-more.src.js"></script>
+<!-- <script src="../highcharts/modules/drilldown.src.js"></script> -->
+<script src="../highcharts/modules/exporting.src.js"></script>
+<script src="../highcharts/modules/offline-exporting.src.js"></script>
+
+<link rel="import" href="../polymer/polymer.html">
+<link rel="import" href="../iron-ajax/iron-ajax.html">
+<link rel="import" href="../paper-icon-button/paper-icon-button.html">
+<link rel="import" href="../paper-input/paper-input.html">
+<link rel="import" href="../paper-button/paper-button.html">
+<link rel="import" href="../paper-spinner/paper-spinner.html">
+<link rel="import" href="../iron-form/iron-form.html">
+
+<link rel="import" href="../wt-bootstrap-styles/wt-bootstrap-styles.html">
+<link rel="import" href="../wt-srch-bar/wt-srch-bar.html">
+<link rel="import" href="../wt-sortable-list/wt-sortable-list.html">
+
+
+<!--
+`<my-station>` Shows the vaadin grid in action with iron-ajax against the climate api.
+In typical use, just slap some `<my-station>` anywhere you would like to put it.
+      <my-station></my-station>
+Wham! It's all awesome now!
+
+@demo /web-components/drawer-app/#/station/list  Super cool demo!!
+-->
+<dom-module id="wt-highchart">
+  <template>
+    <style include="bootstrap-styles">
+      :host {
+        display: block;
+        background-color: #ffffff;
+        padding: 10px;
+      }
+
+      .sortable-button {
+        float: left;
+        width: 150px;
+        height: 50px;
+        margin: 10px;
+        /*background-color: #eeeeee;*/
+        border: 1px solid #73AD21;
+        border-radius: 12px;
+        cursor: move;
+      }
+
+      .clearfix:after {
+          content: "";
+          display: table;
+          clear: both;
+      }
+
+    </style>
+
+    <iron-ajax
+    id="schedules-ajax"
+    url="{{url}}"
+    bubbles="true"
+    headers='{"X-Requested-With": "XMLHttpRequest"}'
+    handle-as="json"
+    headers='{"Cache-control": "no-cache"}'
+    on-response="_handleResponse"></iron-ajax>
+
+        <center>
+        <wt-srch-bar
+          id="wt-srch-bar"
+          search-label=""
+          default-srch={{wtSrchBarDefaultSrch}}
+          filter-types-url="{{wtSrchBarFilterTypesUrl}}"
+          start-date="{{startDate}}"
+          end-date="{{endDate}}">
+        </wt-srch-bar>
+        <br>
+        <br>
+        <div class="row">
+            <div class="col-sm-6">
+                <div id=[[uniqueName]]></div>
+                <div id="backup-slot"></div>
+                <div id="backup-slot2"></div>
+                <paper-spinner style="position: absolute; right: 0; top: 0;" id="spinner"></paper-spinner>
+            </div>
+            <div class="col-sm-6">
+                <paper-button  style="margin: 2px;" hidden raised id='back-button'>◁ Back</paper-button>
+                <div id="highchart_drilldown_container1"></div>
+            </div>
+        </div>
+        <br>
+        <br>
+        <br>
+        <div id="drill-down-order">
+            <h3>Drill Down Order</h3>
+            <sortable-list on-sort-finish="_onSortFinish">
+              <template is="dom-repeat" items={{groupBy}}>
+                <div class="sortable-button">{{item}}</div>
+              </template>
+            </sortable-list>
+        </div>
+        </center>
+
+
+  </template>
+  <script>
+        /**
+     * @customElement
+     * @polymer
+     */
+    class WtHighchart extends Polymer.Element {
+      static get is() { return 'wt-highchart'; }
+
+
+      static get properties() {
+        return {
+            url: String,
+            uniqueName: String,
+            title: String,
+            groupBy: {
+                type: Array,
+                value: [],
+                reflectToAttribute: true
+            },
+            wtSrchBarFilterTypesUrl: String,
+            wtSrchBarDefaultSrch: String,
+            showDrillDownOrder: {
+                type: Boolean,
+                value: false
+            },
+            downloadFields: {
+                type: Object,
+                value: {}
+            },
+            startDate: String,
+            endDate: String,
+        };
+      }
+
+      constructor() {
+        super();
+        this.formLookup = [];
+        this.globalDrilldownStack = [];
+
+        this.initHighcharts(this);
+      }
+
+      _onSortFinish(e) {
+        var me = this;
+        var grps = e.detail.data;
+
+        me.chartData(grps);
+      }
+
+        // Element class can define custom element reactions
+        connectedCallback() {
+            super.connectedCallback();
+              var me = this;
+
+              me.addEventListener('wt-srch-bar-changed', function(e){
+                var ajax = Polymer.dom(this.root).querySelector('#schedules-ajax');
+                ajax.params = e.detail.formData;
+                me.srchForm = e.detail.formData;
+                me.ajax = ajax;
+
+                me.formLookup.push(e.item);
+                var spinner = Polymer.dom(this.root).querySelector('#spinner');
+                spinner.setAttribute("active", "");
+                ajax.generateRequest();
+              });
+
+              if (!me.showDrillDownOrder) {
+                var drilldown = Polymer.dom(this.root).querySelector('#drill-down-order');
+                drilldown.hidden = true;
+              }
+
+              var backButton = Polymer.dom(this.root).querySelector('#back-button');
+              backButton.addEventListener('click', function(e) {
+                me.globalDrilldownStack.pop();
+                var options = me.globalDrilldownStack.pop();
+                me.createDrillDownGraph(options);
+              });
+
+              me.mainChartConfig = me.getMainChartConfig('column', me.title);
+              me.drilldownChartConfig = me.getDrilldownChartConfig('pie', me.title);
+        }
+
+        ready() {
+            super.ready();
+            //console.log('in ready()');
+
+        }
+
+        initHighcharts(me) {
+            Highcharts.setOptions({
+                lang: {
+                    drillUpText: '◁ Back'
+                }
+            });
+
+            Highcharts.wrap(Highcharts.Chart.prototype, 'firstRender', function (proceed) {
+
+                proceed.call(this);
+
+                var chart = this,
+                    container = this.container,
+                    plotLeft = this.plotLeft,
+                    plotTop = this.plotTop,
+                    plotWidth = this.plotWidth,
+                    plotHeight = this.plotHeight,
+                    inverted = this.inverted,
+                    pointer = this.pointer;
+
+                // Note:
+                // - Safari 5, IE8: mousedown, contextmenu, click
+                // - Firefox 5: mousedown contextmenu
+                container.oncontextmenu = function(e) {
+
+                    var hoverPoint = chart.hoverPoint,
+                        chartPosition = pointer.chartPosition;
+
+                    this.rightClick = true;
+
+                    e = pointer.normalize(e);
+
+                    e.cancelBubble = true; // IE specific
+                    e.returnValue = false; // IE 8 specific
+                    if (e.stopPropagation) {
+                        e.stopPropagation();
+                    }
+                    if (e.preventDefault) {
+                        e.preventDefault();
+                    }
+
+                    if (!pointer.hasDragged) {
+                         if (hoverPoint && pointer.inClass(e.target, 'highcharts-tracker')) {
+                             var plotX = hoverPoint.plotX,
+                                 plotY = hoverPoint.plotY;
+
+                             // add page position info
+                             Highcharts.extend(hoverPoint, {
+                                 pageX: chartPosition.left + plotLeft +
+                                     (inverted ? plotWidth - plotY : plotX),
+                                 pageY: chartPosition.top + plotTop +
+                                     (inverted ? plotHeight - plotX : plotY)
+                             });
+                            // Download the data associated with the point you clicked on.
+                            me.downloadData(hoverPoint, hoverPoint.downloadObj, hoverPoint.data);
+                         }
+                   }
+                }
+            });
+        }
+
+        export(exportStr, filename, fileType) {
+            var blob = new Blob([exportStr], { type: fileType });
+            if (navigator.msSaveBlob) { // IE 10+
+                navigator.msSaveBlob(blob, filename);
+            } else {
+                var link = document.createElement("a");
+                if (link.download !== undefined) { // feature detection
+                    // Browsers that support HTML5 download attribute
+                    var url = URL.createObjectURL(blob);
+                    link.setAttribute("href", url);
+                    link.setAttribute("download", filename);
+                    link.style.visibility = 'hidden';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                }
+            }
+        };
+
+        downloadData(series, downloadObj, data) {
+            var me = this;
+            var exportStr = "";
+
+            exportStr += me.title;
+            exportStr += "\n";
+            exportStr += "\n";
+
+            //console.log("SRCH FORM",me.srchForm);
+            exportStr += "Search Criteria:\n";
+            for (var item in me.srchForm) {
+                if (typeof me.srchForm[item] != 'undefined' && item != "master-combo") {
+                    exportStr += item + " = "+ me.srchForm[item] +"\n";
+                }
+            }
+            exportStr += "\n";
+            exportStr += "\n";
+
+            if (typeof series.path != 'undefined') {
+                exportStr += "Local Filter:\n";
+                series.path = series.path.replace(/,/g, " ");
+                if (parseInt(series.path) > 0) {
+                    exportStr += '="'+series.path+'"'+",";
+                } else {
+                    exportStr += '"'+series.path+'"'+",";
+                }
+                exportStr += "\n";
+                exportStr += "\n";
+                exportStr += "\n";
+            }
+
+            // Dump out header
+            for (var item in downloadObj) {
+                exportStr += '"'+downloadObj[item]+'"'+",";
+            }
+            exportStr += "\n";
+
+            // Now dump out data.
+            for (var k= 0; k < data.length; k++) {
+
+                for (var item in downloadObj) {
+                    if (parseInt(data[k][item]) > 0) {
+                        exportStr += '="'+data[k][item]+'"'+",";
+                    } else {
+                       exportStr += '"'+data[k][item]+'"'+",";
+                    }
+                }
+                exportStr += "\n";
+            }
+
+            me.export(exportStr, "chart_download.csv", 'text/csv;charset=utf-8;');
+        }
+
+        getMainChartConfig(chartType, title) {
+            var me = this;
+            // This method is ment to be overridden.
+            //
+            // You must set this.mainChartConfig
+            var mainChartConfig = {
+                chart: {
+                    type: chartType
+                },
+                legend: {
+                    enabled: true
+                },
+                title: {
+                    text: title
+                },
+                yAxis: {
+                    title: {
+                        text: ''
+                    }
+                },
+                exporting: {
+                    buttons: {
+                        contextButton: {
+                            menuItems: [{
+                                text: 'Download CSV File (All Data)',
+                                onclick: function (e) {
+                                    me.downloadData(this.options.series[0], this.options.series[0].downloadObj, this.options.series[0].allData)
+                                }
+                            }, {
+                                text: 'Export to PNG',
+                                onclick: function () {
+                                    this.exportChart();
+                                }
+                            }, {
+                                separator: true
+                            }, {
+                                text: 'switch to (pie)',
+                                onclick: function () {
+                                    me.mainChartConfig = me.getMainChartConfig('pie', me.title);
+                                    me.chartData(me.groupBy);
+                                }
+                            }, {
+                                text: 'switch to (column)',
+                                onclick: function () {
+                                    me.mainChartConfig = me.getMainChartConfig('column', me.title);
+                                    me.chartData(me.groupBy);
+                                },
+                                separator: false
+                            }]
+                        }
+                    },
+                    chartOptions: { // specific options for the exported image
+                        plotOptions: {
+                            series: {
+                                dataLabels: {
+                                    enabled: true
+                                }
+                            }
+                        }
+                    },
+                    scale: 3,
+                    fallbackToExportServer: false
+                },
+                plotOptions: {
+                    pie: {
+                        shadow: false,
+                        center: ['50%', '50%']
+                        //,showInLegend: true
+                    }
+                    ,
+                    series: {
+                        point: {
+                            events: {
+                                click: function (e) {
+                                    if (typeof this.options.drilldown !== 'undefined') {
+                                        var backButton = Polymer.dom(me.root).querySelector('#back-button');
+                                        backButton.hidden = true;
+                                        me.globalDrilldownStack.length = 0;
+                                        me.createDrillDownGraph(this.options);
+                                    }
+                                },
+                                contextmenu: function (e) {
+                                    //console.log("CONTEXT",$(e.currentTarget), e.currentTarget.series);
+                                }
+                            }
+                        }
+                    }
+                },
+                xAxis: {
+                    categories: [],
+                     labels: {
+                        formatter: function() {
+                            return this.value;
+                        }
+                    }
+                },
+                tooltip: {
+                    enabled: true,
+                    formatter: function() {
+                        return '<b>' + this.point.name + ':  ( ' + this.y + ' )</b>';
+                    }
+                },
+                series: [{
+                    showInLegend: false,
+                    name: '',
+                    data: [],
+                    size: '80%',
+                    //innerSize: '15%',
+                    dataLabels: {
+                        enabled: true,
+                        align: 'center',
+                        formatter: function () {
+                            return this.y;
+                        },
+                        color: '#000000',
+                        distance: 8
+                    }
+                }]
+            };
+
+            return mainChartConfig;
+        }
+
+        getDrilldownChartConfig(chartType,title) {
+            var me = this;
+            // This method is ment to be overridden.
+            //
+            //    Optionally set this.drilldownChartConfig
+            var drilldownChartConfig = {
+                chart: {
+                    type: chartType
+                },
+                title: {
+                    text: title
+                },
+                yAxis: {
+                    title: {
+                        text: ''
+                    }
+                },
+                exporting: {
+                    buttons: {
+                        contextButton: {
+                            menuItems: [{
+                                text: 'Download CSV File (All Data)',
+                                onclick: function (e) {
+                                    me.downloadData(this.options.series[0], this.options.series[0].downloadObj, this.options.series[0].allData)
+                                }
+                            }, {
+                                text: 'Export to PNG',
+                                onclick: function () {
+                                    this.exportChart();
+                                }
+                            }, {
+                                separator: true
+                            }, {
+                                text: 'switch to (pie)',
+                                onclick: function () {
+                                    me.drilldownChartConfig = me.getDrilldownChartConfig('pie', me.title);
+                                    me.chartData(me.groupBy);
+                                    //me.createDrillDownGraph(me.options);
+                                },
+                                separator: false
+                            }, {
+                                text: 'witch to (column)',
+                                onclick: function () {
+                                    me.drilldownChartConfig = me.getDrilldownChartConfig('column', me.title);
+                                    me.chartData(me.groupBy);
+                                    //me.createDrillDownGraph(me.options);
+                                },
+                                separator: false
+                            }]
+                        }
+                    },
+                    chartOptions: { // specific options for the exported image
+                        plotOptions: {
+                            series: {
+                                dataLabels: {
+                                    enabled: true
+                                }
+                            }
+                        }
+                    },
+                    scale: 3,
+                    fallbackToExportServer: false
+                },
+                plotOptions: {
+                    pie: {
+                        shadow: false,
+                        center: ['50%', '50%']
+                    }
+                    ,
+                    series: {
+                        point: {
+                            events: {
+                                click: function (e) {
+                                    if (typeof this.options.drilldown !== 'undefined') {
+                                        me.createDrillDownGraph(this.options);
+                                    }
+                                },
+                                contextmenu: function (e) {
+                                    //console.log("CONTEXT",e.currentTarget,e.currentTarget.series);
+                                }
+                            }
+                        }
+                    }
+                },
+                xAxis: {
+                    categories: [],
+                     labels: {
+                        formatter: function() {
+                            return this.value;
+                        }
+                    }
+                },
+                tooltip: {
+                    enabled: true,
+                    formatter: function() {
+                        return '<b>' + this.point.name + ':  ( ' + this.y + ' )</b>';
+                    }
+                },
+                series: [{
+                    showInLegend: false,
+                    name: '',
+                    data: [],
+                    size: '80%',
+                    //innerSize: '15%',
+                    dataLabels: {
+                        enabled: true,
+                        align: 'center',
+                        formatter: function () {
+                            return this.y > 0 ? '' +this.point.name  + ':   ( ' + this.y + ' )' : null;
+                        },
+                        color: '#000000',
+                        distance: 8
+                    }
+
+                }]
+            };
+
+            return drilldownChartConfig;
+        }
+
+
+        createDrillDownGraph(options) {
+            var me = this;
+            var ddContainter1 = Polymer.dom(this.root).querySelector('#highchart_drilldown_container1');
+            var backButton = Polymer.dom(this.root).querySelector('#back-button');
+            ddContainter1.hidden = false;
+
+            if (typeof me.drilldownChartConfig.series !== 'undefined') {
+                for (var i=0; i<me.drilldownChartConfig.series.length; i++) {
+                    me.drilldownChartConfig.series[i].data.length = 0;
+                    me.drilldownChartConfig.xAxis.categories.length = 0;
+                }
+            }
+
+            for (var k in options.drilldown) {
+                if (typeof me.drilldownChartConfig.series[0] !== 'undefined') {
+                    me.drilldownChartConfig.series[0].data.push(options.drilldown[k]);
+                    me.drilldownChartConfig.xAxis.categories.push(options.drilldown[k].name);
+                }
+            }
+
+            me.drilldownChartConfig.title.text = "( "+options.path+" )";
+
+            var high = me.$.highchart_drilldown_container1;
+            // high.addEventListener('drilldown', function(e) {
+            //     console.log(e)
+            //     this.addSeriesAsDrilldown(e.point, seriesOptions);
+            // });
+            var chart = $(high).highcharts(me.drilldownChartConfig);
+
+            if (me.globalDrilldownStack.length > 0) {
+                backButton.hidden = false;
+            } else {
+                backButton.hidden = true;
+            }
+
+            me.globalDrilldownStack.push(options);
+        }
+
+        _groupBy(data, groups, func, pathFunc) {
+            var me = this;
+
+            if (groups.length == 0) {
+                //base case
+                //this returns the leaf nodes
+                return JSON.parse(JSON.stringify(data)); //copy the array, in the future we should use Objext.assign() but this is not yet fully supported.
+                //because of performance costs I no longer provide the data in the leaf nodes.
+                //if you do want that data you can uncomment the line that returns the copied object
+               //return [];
+               path = "";
+            }
+            else {
+                function IN(list, val) {
+                    if (list.indexOf(val) == -1) {
+                        return false;
+                    }
+                    return true;
+                }
+                let group = groups[0];
+                let r = [];
+                let names = [];
+                for (let i = 0; i < data.length; i++) {
+                    if(! IN(names, data[i][group])) {
+                        names.push(data[i][group]);
+                    }
+                }
+                for (let index = 0; index < names.length; index++) {
+                    let name = names[index];
+                    let pathArray = [];
+                    let f = [];
+                    for (let  i = 0; i < data.length; i++) {
+                        if (data[i][group] == name) {
+                            pathArray.push(i);
+                            f.push(data[i]);
+                        }
+                    }
+                    var brightness = 0.2 - (index / func(f,group)) / 5;
+                    var path = name;
+                    r.push({
+                        name : name,
+                        y : func(f, group, name),
+                        drilldown : this._groupBy(f, groups.slice(1, groups.length), func, pathFunc),
+                        group : group,
+                        path  : pathFunc(f, me.groupBy, group, name),
+                        data  : f,
+                        groups: me.groupBy,
+                        downloadObj: me.downloadFields
+                    });
+                }
+                return r;
+            }
+        }
+
+        reloadData() {
+            var me = this;
+            var spinner = Polymer.dom(this.root).querySelector('#spinner');
+            spinner.setAttribute("active", "");
+            me.data = [];
+            me.data.length = 0;
+            me.ajax.generateRequest();
+            spinner.setAttribute("active", "");
+            me.chartData();
+        }
+
+        chartData(groups) {
+           var me = this;
+
+           var colors = Highcharts.getOptions().colors;
+           var ddContainter1 = Polymer.dom(me.root).querySelector('#highchart_drilldown_container1');
+           ddContainter1.hidden = true;
+
+           if (typeof groups === 'undefined') {
+                groups = me.groupBy;
+           }
+
+           if (typeof me.mainChartConfig.series !== 'undefined') {
+                for (var i=0; i<me.mainChartConfig.series.length; i++) {
+                    me.mainChartConfig.series[i].data.length = 0;
+                    me.mainChartConfig.xAxis.categories.length = 0;
+                }
+           }
+
+           // Create aggregate function to count them up by group.
+           var aggFunction = function(data, group, name) {
+                var returnCnt = 0;
+                for (var i=0; i<data.length; i++) {
+                    if (data[i][group] == name) {
+                        returnCnt++;
+                    }
+                }
+                return returnCnt;
+            }
+
+            // Create aggregate function to create the path of the drilldown.
+           var pathFunction = function(data, groups, group, name) {
+                var path = "";
+                for (var i=0; i<groups.length; i++) {
+                    if (groups[i] != group) {
+                        path += data[0][groups[i]] + " > ";
+                    } else {
+                        path += data[0][groups[i]];
+                        break;
+                    }
+
+                }
+                return path;
+            }
+
+            // Group up the data by group array
+            me.treeObj = me._groupBy(me.data,groups,aggFunction, pathFunction);
+
+            function eachRecursive(series, obj, color) {
+                for (var k in obj) {
+                    if (typeof obj[k].drilldown !== 'undefined') {
+                        if (obj[k].drilldown.length > 0) {
+                            var brightness = 0.1 - (k) / 5;
+                            obj[k].color = Highcharts.Color(colors[color]).brighten(brightness).get();
+                            if (typeof me.mainChartConfig.series[series] !== 'undefined') {
+                                me.mainChartConfig.series[series].data.push(obj[k]);
+                                me.mainChartConfig.series[0].allData = me.data;
+                                me.mainChartConfig.series[0].downloadObj = me.downloadFields;
+                                me.mainChartConfig.xAxis.categories.push(obj[k].name);
+                            }
+                            eachRecursive(series+1,obj[k].drilldown, color);
+                            color++;
+                        } else {
+                            var brightness = 0.1 - (k) / 5;
+                            obj[k].color = Highcharts.Color(colors[color]).brighten(brightness).get();
+                            if (typeof me.mainChartConfig.series[series] !== 'undefined') {
+                               me.mainChartConfig.series[series].data.push(obj[k]);
+                               me.mainChartConfig.xAxis.categories.push(obj[k].name);
+                            }
+                        }
+                    }
+
+                }
+            }
+
+            eachRecursive(0, me.treeObj, 0);
+
+            var high = Polymer.dom(me.root).querySelector('#'+me.uniqueName);
+            var backButton = Polymer.dom(this.root).querySelector('#back-button');
+            backButton.hidden = true;
+
+
+            // This is a weird little bug that I am working around here...
+            if (high == null || typeof high == 'undefined') {
+                high = Polymer.dom(me.root).querySelector('#backup-slot');
+            }
+            if (high == null || typeof high == 'undefined') {
+                high = Polymer.dom(me.root).querySelector('#backup-slot2');
+            }
+            var chartObj = $(high);
+
+            chartObj.highcharts(me.mainChartConfig);
+
+            var spinner = Polymer.dom(this.root).querySelector('#spinner');
+
+            if (me.data.length >= 1) {
+                spinner.removeAttribute("active");
+            } else {
+                // If the data[] is empty lets keep the spinner going for 6 seconds or so in-case
+                // another ajax comes.  Could be the graph is hidden behind a tab
+                // and when they click on the tab another ajax could come.
+                setTimeout(function(){
+                    spinner.removeAttribute("active");
+                }, 6000);
+            }
+        }
+
+      _handleResponse(e) {
+        var me = this;
+        var config = this.mainChartConfig;
+        var i = 0;
+
+        me.data = e.detail.response.payload;
+
+        // Important -- The groupBy array is a polymer property -- without it nothing will display
+        var groups = me.groupBy;
+
+        me.chartData(groups);
+
+      }
+
+    }
+
+    window.customElements.define(WtHighchart.is, WtHighchart);
+  </script>
+</dom-module>
