@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, minimum-scale=1, initial-scale=1, user-scalable=yes">
+
+    <title>wt-srch-bar demo</title>
+
+    <script src="../../webcomponentsjs/webcomponents-lite.js"></script>
+
+    <link rel="import" href="../../iron-demo-helpers/demo-pages-shared-styles.html">
+    <link rel="import" href="../../iron-demo-helpers/demo-snippet.html">
+    <link rel="import" href="../wt-highcharts.html">
+
+    <custom-style>
+      <style is="custom-style" include="demo-pages-shared-styles">
+
+      .centered900 {
+        max-width: 900px;
+        margin-left: auto;
+        margin-right: auto;
+      }
+      </style>
+    </custom-style>
+  </head>
+  <body>
+    <div class="vertical-section-container centered900">
+      <h3>Basic wt-srch-bar demo!</h3>
+      <demo-snippet>
+        <template>
+        <wt-highchart
+          unique-name="wt-highchart1"
+          title="Example Highchart"
+          group-by='["gender", "eyeColor", "favoriteFruit", "name"]'
+          download-fields='{"name": "Employee", "age": "Age", "eyeColor": "Eye Color", "gender":"Sex", "phone": "Phone", "address": "Address"}'
+          url="./data/flat_data.txt"
+          wt-srch-bar-filter-types-url="./data/master-combo.txt"
+          wt-srch-bar-default-srch="as-of-date"
+          start-date="2017-01-01">
+        </wt-highchart>
+        </template>
+      </demo-snippet>
+    </div>
+    <div class="vertical-section-container centered900">
+      <h3>Basic wt-srch-bar demo!</h3>
+      <demo-snippet>
+        <template>
+        <wt-highchart
+          unique-name="wt-highchart1"
+          title="Example Highchart"
+          group-by='["gender", "eyeColor", "favoriteFruit", "name"]'
+          download-fields='{"name": "Employee", "age": "Age", "eyeColor": "Eye Color", "gender":"Sex", "phone": "Phone", "address": "Address"}'
+          url="./data/flat_data.txt"
+          wt-srch-bar-filter-types-url="./data/master-combo.txt"
+          wt-srch-bar-default-srch="as-of-date"
+          start-date="2017-01-01"
+          show-drill-down-order>
+        </wt-highchart>
+        </template>
+      </demo-snippet>
+    </div>
+  </body>
+</html>
